@@ -1,166 +1,618 @@
-name: 💻 固件编译
+name: Build NL-WR8103 ImmortalWrt 25.12 Factory
 
 on:
   workflow_dispatch:
-    inputs:
-      device:
-        description: '➡️ 选择需构建固件的设备型号'
-        required: true
-        default: 'netcore-n60-pro'
-        type: choice
-        options:
-          - 'cetron-ct3003'
-          - 'cmcc-a10'
-          - 'cmcc-rax3000m-emmc'
-          - 'cmcc-rax3000m-nand'
-          - 'cmcc-rax3000me-nand'
-          - 'umi-uax3000e'          
-          - 'h3c-magic-nx30-pro'
-          - 'imou-lc-hx3001'
-          - 'nokia-ea0326gmp'
-          - 'newland-nl-wr8103'
-          - 'philips-hy3000'
-          - 'qihoo-360t7'
-          - 'xiaomi-mi-router-ax3000t'         
-          - 'clx-s20p'
-          - 'netcore-n60-pro'
-          - 'netcore-n60-pro-512rom'
-          - 'xiaomi-redmi-router-ax6000'
-          - 'xiaomi-redmi-router-ax6000-512rom'
-          - 'jdcloud-re-cp-03'
-          - 'all-mt7981-devices'
-          - 'all-mt7986-devices'
-          - 'all-high-power-devices'
-      lan_addr:
-        description: '🌐 设置默认 LAN IP 地址'
-        required: true
-        default: '10.0.0.1'
-        type: string
-      wifi_name:
-        description: '🛜 设置默认 WIFI 名称（可选，默认ZeroWrt）'
-        required: false
-        default: 'ZeroWrt'
-        type: string
-      wifi_password:
-        description: '🆔 设置默认 WIFI 密码（可选，默认1234567890）'
-        required: false
-        default: '1234567890'
-        type: string          
-      root_password:
-        description: '🔐 设置默认 root 密码（可选，默认password）'
-        required: false
-        default: 'password'
-        type: string
-      build_options:
-        description: '🔧 构建选项（可输入多个，用空格分隔）'
-        required: false
-        default: 'BUILD_FAST=y ENABLE_BPF=y'
-        type: string
+  push:
+    paths:
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nl-wr8103-factory-build
+  cancel-in-progress: true
 
 jobs:
   build:
-    name: Build ${{ github.event.inputs.device }}
+    name: Build NL-WR8103 Factory and Sysupgrade
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        shell: bash
+    timeout-minutes: 360
 
     steps:
-    - name: Checkout
-      continue-on-error: true
-      uses: actions/checkout@main
-      with:
-        path: immortalwrt-mt798x-action
+      - name: Free disk space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h /
 
-    - name: Setup variables
-      run: |
-        sudo timedatectl set-timezone 'Asia/Shanghai'
-        git config --global user.name 'actions'
-        git config --global user.email 'action@github.com'
-        echo build_dir="/builder" >> "$GITHUB_ENV"
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/share/swift
+          sudo docker system prune -af || true
 
-    - name: Show system
-      run: |
-        echo -e "\n\e[1;32mCPU:\e[0m"
-        echo "$(grep 'model name' /proc/cpuinfo | head -1 | awk -F ': ' '{print $2}') ($(grep 'cpu MHz' /proc/cpuinfo | head -1 | awk -F ': ' '{print $2}')MHz) x $(grep processor /proc/cpuinfo  | wc -l)"
-        echo -e "\n\e[1;32mMemory:\e[0m"
-        free -h
-        echo -e "\n\e[1;32mStorage:\e[0m"
-        df -Th / /mnt
-        echo -e "\n\e[1;32mSystem:\e[0m"
-        lsb_release -a
-        echo -e "\n\e[1;32mKernel:\e[0m"
-        uname -a
-        echo
+          echo "Disk space after cleanup:"
+          df -h /
 
-    - name: Install Caddy Server
-      run: |
-        sudo curl -sL -o /usr/bin/caddy https://github.com/OPPEN321/caddy/releases/download/v2.10.2/caddy-amd64
-        sudo chmod 755 /usr/bin/caddy
-        echo ":8080 {" > caddyfile
-        echo "    root * $(pwd)/immortalwrt-mt798x-action" >> caddyfile
-        echo "    file_server browse" >> caddyfile
-        echo "}" >> caddyfile
-        sudo /usr/bin/caddy start --config caddyfile --adapter caddyfile
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ack antlr3 asciidoc autoconf automake autopoint \
+            binutils bison build-essential bzip2 ccache clang \
+            cmake cpio curl device-tree-compiler ecj fastjar flex \
+            gawk gettext gcc-multilib g++-multilib git gnutls-dev \
+            gperf haveged help2man intltool lib32gcc-s1 \
+            libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev \
+            libltdl-dev libmpc-dev libmpfr-dev libncurses-dev \
+            libpython3-dev libreadline-dev libssl-dev libtool \
+            libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp \
+            nano ninja-build p7zip p7zip-full patch pkgconf \
+            python3 python3-pip python3-venv python3-ply \
+            python3-docutils python3-pyelftools qemu-utils re2c \
+            rsync scons squashfs-tools subversion swig texinfo \
+            uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
 
-    - name: Free disk space
-      uses: sbwml/actions@free-disk
-      with:
-        build-mount-path: /builder
+      - name: Checkout ImmortalWrt source
+        uses: actions/checkout@v4
+        with:
+          repository: ByteArray0/immortalwrt-device-expand
+          ref: immortalwrt-25.12
+          path: immortalwrt
+          fetch-depth: 1
 
-    - name: Build System Setup
-      uses: sbwml/actions@openwrt-build-setup
+      - name: Update and install feeds
+        working-directory: immortalwrt
+        run: |
+          set -euo pipefail
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
-    - name: Install LLVM
-      uses: sbwml/actions@install-llvm
+      - name: Configure NL-WR8103
+        working-directory: immortalwrt
+        run: |
+          set -euo pipefail
 
-    - name: Compile OpenWrt
-      working-directory: /builder
-      id: compile
-      continue-on-error: true
-      run: |
-        export ${{ github.event.inputs.build_options }} LAN=${{ github.event.inputs.lan_addr }} WIFI_NAME=${{ github.event.inputs.wifi_name }} WIFI_PASSWORD=${{ github.event.inputs.wifi_password }}
-        [ -n ${{ github.event.inputs.root_password }} ] && export ROOT_PASSWORD="${{ github.event.inputs.root_password }}"
-        bash <(curl -sS http://127.0.0.1:8080/build.sh) ${{ github.event.inputs.device }}
-        cd openwrt
-        tags=$(git branch --show-current)
-        echo "latest_release=$tags" >>$GITHUB_ENV
+          cat > .config <<'EOF'
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_filogic=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_newland_nl-wr8103=y
 
-    - name: Extensive logs after a failed compilation
-      working-directory: /builder
-      if: steps.compile.outcome == 'failure'
-      run: |
-        cd openwrt
-        make V=s
-        
-    - name: Prepare Firmware Files
-      working-directory: /builder
-      run: |
-        mkdir -p rom
-        case "${{ github.event.inputs.device }}" in
-          cetron-ct3003|cmcc-a10|cmcc-rax3000m-emmc|cmcc-rax3000m-nand|cmcc-rax3000me-nand|\
-          h3c-magic-nx30-pro|imou-lc-hx3001|nokia-ea0326gmp|philips-hy3000|qihoo-360t7|\
-          newland-nl-wr8103|umi-uax3000e|xiaomi-mi-router-ax3000t|clx-s20p|netcore-n60-pro|\
-          netcore-n60-pro-512rom|xiaomi-redmi-router-ax6000|xiaomi-redmi-router-ax6000-512rom|\
-          jdcloud-re-cp-03|all-mt7981-devices|all-mt7986-devices|all-high-power-devices)
-              cp -a openwrt/bin/targets/mediatek/*/*-sysupgrade.bin rom/
-              ;;
-        esac
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_luci-proto-ppp=y
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ github.event.inputs.device }}-openwrt-${{ env.latest_release }}
-        path: ${{ env.build_dir }}/rom/*
+          CONFIG_PACKAGE_ppp=y
+          CONFIG_PACKAGE_ppp-mod-pppoe=y
 
-    - name: Create release
-      continue-on-error: true
-      uses: ncipollo/release-action@v1
-      with:
-        name: ${{ env.latest_release }}
-        allowUpdates: true
-        tag: ${{ env.latest_release }}
-        commit: main
-        replacesArtifacts: true
-        token: ${{ secrets.GITHUB_TOKEN }}
-        artifacts: ${{ env.build_dir }}/rom/*
+          CONFIG_PACKAGE_firewall4=y
+          CONFIG_PACKAGE_dnsmasq-full=y
+
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_ca-bundle=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_iperf3=y
+          EOF
+
+          make defconfig
+
+          grep -qx \
+            'CONFIG_TARGET_mediatek_filogic_DEVICE_newland_nl-wr8103=y' \
+            .config
+
+          echo "NL-WR8103 target configuration verified."
+
+      - name: Prepare legacy UBI Factory image rule
+        working-directory: immortalwrt
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PYCODE'
+          from pathlib import Path
+
+          path = Path("target/linux/mediatek/image/filogic.mk")
+          source = path.read_text()
+
+          start = source.index("define Device/newland_nl-wr8103")
+          end = source.index("\nendef", start)
+          block = source[start:end]
+
+          required = [
+              "DEVICE_MODEL := NL-WR8103",
+              "DEVICE_DTS := mt7981b-newland_nl-wr8103",
+              "KERNEL_IN_UBI := 1",
+              "UBOOTENV_IN_UBI := 1",
+              "KERNEL := kernel-bin | gzip",
+              "IMAGES := sysupgrade.itb",
+              "BLOCKSIZE := 128k",
+              "PAGESIZE := 2048",
+          ]
+          for item in required:
+              if item not in block:
+                  raise SystemExit("Expected source setting not found: " + item)
+
+          # The legacy device stores kernel and rootfs as separate UBI
+          # volumes. rootfs_data is an autoresize volume-table entry.
+          block = block.replace("  UBOOTENV_IN_UBI := 1\n", "", 1)
+
+          # Generate an inline FIT: both kernel and DTB are embedded in it.
+          old_kernel = "  KERNEL := kernel-bin | gzip\n"
+          new_kernel = (
+              "  KERNEL := kernel-bin | lzma | "
+              "nl-wr8103-fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb\n"
+          )
+          block = block.replace(old_kernel, new_kernel, 1)
+
+          block = block.replace(
+              "  IMAGES := sysupgrade.itb\n",
+              "  IMAGE_SIZE := 116736k\n"
+              "  IMAGES := factory.bin sysupgrade.itb\n"
+              "  IMAGE/factory.bin := append-ubi | check-size $$$$(IMAGE_SIZE)\n",
+              1,
+          )
+
+          if "UBOOTENV_IN_UBI" in block:
+              raise SystemExit("ERROR: UBOOTENV_IN_UBI was not removed")
+          if "nl-wr8103-fit" not in block:
+              raise SystemExit("ERROR: inline FIT rule was not selected")
+          if "IMAGE/factory.bin := append-ubi" not in block:
+              raise SystemExit("ERROR: Factory image rule was not added")
+
+          helper = Path("tools/nl-wr8103-fit-metadata.py")
+          helper.write_text(r'''#!/usr/bin/env python3
+          import os
+          import sys
+          import zlib
+          from pathlib import Path
+          
+          its_path = Path(sys.argv[1])
+          rootfs_path = Path(sys.argv[2])
+          its = its_path.read_text()
+          rootfs = rootfs_path.read_bytes()
+          if not rootfs.startswith(b"hsqs"):
+              raise SystemExit("NL-WR8103 FIT: IMAGE_ROOTFS is not SquashFS")
+          size = len(rootfs)
+          crc = zlib.crc32(rootfs) & 0xffffffff
+          crc_text = f"{crc:08x}"
+          crc_bytes = " ".join(f"{(crc >> shift) & 0xff:02x}" for shift in (24, 16, 8, 0))
+          image_time = os.environ.get("SOURCE_DATE_EPOCH", "0") or "0"
+          root_props = (
+              f'\trootfs_crc32 = "{crc_text}";\n'
+              f'\trootfs_size = "{size}";\n'
+              f'\timage_time = "{image_time}";\n'
+          )
+          if "\timages {" not in its:
+              raise SystemExit("NL-WR8103 FIT: mkits.sh output has no images node")
+          its = its.replace("\timages {", root_props + "\timages {", 1)
+          rootfs_node = (
+              "\trootfs {\n"
+              f"\t\tsize = <0x{size:x}>;\n"
+              "\t\thash-1 {\n"
+              "\t\t\talgo = \"crc32\";\n"
+              f"\t\t\tvalue = [{crc_bytes}];\n"
+              "\t\t};\n"
+              "\t};\n"
+          )
+          marker = "\tconfigurations {"
+          if marker not in its:
+              raise SystemExit("NL-WR8103 FIT: mkits.sh output has no configurations node")
+          its = its.replace(marker, rootfs_node + marker, 1)
+          its_path.write_text(its)
+          print(f"Legacy FIT rootfs metadata: size={size}, crc32={crc_text}")
+          ''')
+          helper.chmod(0o755)
+
+          custom_rule = r'''
+          define Build/nl-wr8103-fit
+          $(call Build/fit-its,$(1))
+          python3 $(TOPDIR)/tools/nl-wr8103-fit-metadata.py "$@.its" "$(IMAGE_ROOTFS)"
+          $(call Build/fit-image,$(1))
+          endef
+          '''
+          import textwrap
+          custom_rule = textwrap.dedent(custom_rule).strip("\n")
+          custom_lines = custom_rule.splitlines()
+          custom_rule = "\n".join(
+              [custom_lines[0]]
+              + ["\t" + line for line in custom_lines[1:-1]]
+              + [custom_lines[-1]]
+          ) + "\n\n"
+
+          if "define Build/nl-wr8103-fit" in source:
+              raise SystemExit("ERROR: Build/nl-wr8103-fit already exists")
+
+          source = source[:start] + custom_rule + source[start:]
+          start = source.index("define Device/newland_nl-wr8103")
+          end = source.index("\nendef", start)
+          source = source[:start] + block + source[end:]
+          path.write_text(source)
+
+          print("Updated NL-WR8103 device definition:")
+          print(block)
+          PYCODE
+
+      - name: Download source packages
+        working-directory: immortalwrt
+        run: |
+          set -euo pipefail
+          make download -j2
+
+      - name: Compile firmware
+        working-directory: immortalwrt
+        env:
+          FORCE_UNSAFE_CONFIGURE: 1
+        run: |
+          set -euo pipefail
+          make -j2 V=s
+
+      - name: Verify NL-WR8103 Factory UBI image
+        working-directory: immortalwrt
+        run: |
+          set -euo pipefail
+
+          OUT="bin/targets/mediatek/filogic"
+
+          FACTORY="$(find "$OUT" -maxdepth 1 -type f \
+            -name '*newland_nl-wr8103*factory.bin' -print -quit)"
+
+          SYSUPGRADE="$(find "$OUT" -maxdepth 1 -type f \
+            -name '*newland_nl-wr8103*sysupgrade.itb' -print -quit)"
+
+          if [ -z "$FACTORY" ]; then
+            echo "::error::NL-WR8103 Factory image not found."
+            exit 1
+          fi
+
+          if [ -z "$SYSUPGRADE" ]; then
+            echo "::error::NL-WR8103 sysupgrade image not found."
+            exit 1
+          fi
+
+          echo "Factory image:"
+          ls -lh "$FACTORY"
+          file "$FACTORY"
+
+          echo "Sysupgrade image:"
+          ls -lh "$SYSUPGRADE"
+          file "$SYSUPGRADE"
+
+          python3 - "$FACTORY" "$SYSUPGRADE" <<'PY'
+          import struct
+          import sys
+          import zlib
+          from pathlib import Path
+
+          PEB = 131072
+          LEB = 126976
+          LAYOUT_VOLUME_ID = 0x7fffefff
+
+          def fail(message):
+              raise SystemExit("ERROR: " + message)
+
+          def read_ubi(path):
+              image = Path(path).read_bytes()
+
+              if not image or len(image) % PEB:
+                  fail("Factory image size is not a whole number of 128 KiB PEBs.")
+
+              if image[:4] != b"UBI#":
+                  fail("Factory image does not start with UBI magic.")
+
+              volumes = {}
+              geometry_seen = set()
+
+              for offset in range(0, len(image), PEB):
+                  peb = image[offset:offset + PEB]
+                  if peb[:4] != b"UBI#":
+                      continue
+
+                  if peb[4] != 1:
+                      fail("Unsupported UBI EC header version.")
+
+                  vid_offset, data_offset = struct.unpack(">II", peb[16:24])
+
+                  if (vid_offset, data_offset) != (2048, 4096):
+                      fail("Unexpected UBI header offsets: "
+                           f"{vid_offset}, {data_offset}")
+
+                  geometry_seen.add((vid_offset, data_offset))
+
+                  vid = peb[vid_offset:vid_offset + 64]
+                  if vid[:4] != b"UBI!":
+                      continue
+
+                  volume_id, lnum = struct.unpack(">II", vid[8:16])
+                  data = peb[data_offset:]
+
+                  if lnum in volumes.setdefault(volume_id, {}):
+                      fail(f"Duplicate UBI logical block: volume {volume_id}, LEB {lnum}")
+
+                  volumes[volume_id][lnum] = data
+
+              if not geometry_seen:
+                  fail("No valid UBI erase-counter headers found.")
+
+              return volumes
+
+          def volume_bytes(volumes, volume_id):
+              blocks = volumes.get(volume_id)
+              if not blocks:
+                  return b""
+
+              indexes = sorted(blocks)
+              if indexes != list(range(len(indexes))):
+                  fail(f"UBI volume {volume_id} has missing logical eraseblocks.")
+
+              return b"".join(blocks[i] for i in indexes)
+
+          def parse_volume_table(volumes):
+              table = volume_bytes(volumes, LAYOUT_VOLUME_ID)
+              if not table:
+                  fail("UBI volume table is missing.")
+
+              records = {}
+              for index in range(len(table) // 172):
+                  record = table[index * 172:(index + 1) * 172]
+                  reserved, alignment, data_pad = struct.unpack(">III", record[:12])
+                  volume_type = record[12]
+                  name_len = struct.unpack(">H", record[14:16])[0]
+
+                  if not name_len or name_len > 128:
+                      continue
+
+                  name = record[16:16 + name_len].decode("utf-8", "strict")
+                  flags = record[144]
+
+                  records[name] = {
+                      "id": index,
+                      "reserved": reserved,
+                      "alignment": alignment,
+                      "data_pad": data_pad,
+                      "type": volume_type,
+                      "flags": flags,
+                  }
+
+              return records
+
+          def parse_fdt(blob):
+              if len(blob) < 40 or blob[:4] != bytes.fromhex("d00dfeed"):
+                  fail("Kernel volume does not begin with a FIT/FDT header.")
+
+              (total, off_struct, off_strings, off_rsv,
+               version, last_comp, boot_cpu, size_strings,
+               size_struct) = struct.unpack(">9I", blob[4:40])
+
+              if total < 40 or total > len(blob):
+                  fail("Invalid FIT totalsize.")
+
+              if version < 16 or off_struct + size_struct > total:
+                  fail("Invalid FIT structure block.")
+
+              strings = blob[off_strings:off_strings + size_strings]
+              structure = blob[off_struct:off_struct + size_struct]
+
+              nodes = {}
+              stack = []
+              pos = 0
+
+              while pos + 4 <= len(structure):
+                  token = struct.unpack(">I", structure[pos:pos + 4])[0]
+                  pos += 4
+
+                  if token == 1:  # FDT_BEGIN_NODE
+                      end = structure.find(b"\0", pos)
+                      if end < 0:
+                          fail("Malformed FIT node name.")
+
+                      name = structure[pos:end].decode("utf-8", "strict")
+                      pos = (end + 4) & ~3
+
+                      if not stack:
+                          node_path = "/"
+                      else:
+                          parent = stack[-1]
+                          node_path = parent.rstrip("/") + "/" + name
+
+                      nodes[node_path] = {}
+                      stack.append(node_path)
+
+                  elif token == 2:  # FDT_END_NODE
+                      if not stack:
+                          fail("Malformed FIT node nesting.")
+                      stack.pop()
+
+                  elif token == 3:  # FDT_PROP
+                      if not stack or pos + 8 > len(structure):
+                          fail("Malformed FIT property.")
+
+                      length, name_offset = struct.unpack(">II", structure[pos:pos + 8])
+                      pos += 8
+
+                      if name_offset >= len(strings):
+                          fail("Invalid FIT property-name offset.")
+
+                      name_end = strings.find(b"\0", name_offset)
+                      if name_end < 0:
+                          fail("Malformed FIT property name.")
+
+                      prop_name = strings[name_offset:name_end].decode("utf-8", "strict")
+                      value = structure[pos:pos + length]
+                      if len(value) != length:
+                          fail("Truncated FIT property.")
+
+                      pos = (pos + length + 3) & ~3
+                      nodes[stack[-1]][prop_name] = value
+
+                  elif token == 4:  # FDT_NOP
+                      continue
+
+                  elif token == 9:  # FDT_END
+                      break
+
+                  else:
+                      fail(f"Unknown FIT structure token: {token}")
+
+              return total, nodes
+
+          def text_prop(node, name):
+              value = node.get(name)
+              if value is None:
+                  fail(f"FIT property missing: {name}")
+              try:
+                  return value.rstrip(b"\0").decode("ascii")
+              except UnicodeDecodeError:
+                  fail(f"FIT property is not ASCII text: {name}")
+
+          factory_path, sysupgrade_path = sys.argv[1:3]
+
+          volumes = read_ubi(factory_path)
+          records = parse_volume_table(volumes)
+
+          # The original NL-WR8103 factory image contains kernel and rootfs
+          # in its UBI volume table. rootfs_data is created/resized at first boot.
+          expected_names = {"kernel", "rootfs"}
+          if set(records) != expected_names:
+              fail("Unexpected UBI volume names: " + repr(sorted(records)))
+
+          if records["kernel"]["id"] != 0:
+              fail("The kernel UBI volume is not volume ID 0.")
+
+          if records["rootfs"]["id"] != 1:
+              fail("The rootfs UBI volume is not volume ID 1.")
+
+          kernel = volume_bytes(volumes, 0)
+          rootfs = volume_bytes(volumes, 1)
+
+          if not kernel or not rootfs:
+              fail("Kernel or rootfs UBI volume is empty.")
+
+          if len(kernel) != records["kernel"]["reserved"] * LEB:
+              fail("Kernel UBI volume size does not match its volume-table reservation.")
+
+          if len(rootfs) != records["rootfs"]["reserved"] * LEB:
+              fail("Rootfs UBI volume size does not match its volume-table reservation.")
+
+          if rootfs[:4] != b"hsqs":
+              fail("Rootfs UBI volume does not contain a SquashFS filesystem.")
+
+          fit_size, nodes = parse_fdt(kernel)
+
+          if any(byte != 0xff for byte in kernel[fit_size:]):
+              fail("Kernel UBI volume contains unexpected data after FIT totalsize.")
+
+          kernel_node = nodes.get("/images/kernel-1", {})
+          fdt_node = nodes.get("/images/fdt-1", {})
+          rootfs_node = nodes.get("/rootfs", {})
+          rootfs_hash = nodes.get("/rootfs/hash-1", {})
+          config_node = nodes.get("/configurations/config-1", {})
+          configurations = nodes.get("/configurations", {})
+
+          if text_prop(kernel_node, "type") != "kernel":
+              fail("FIT kernel-1 type is not kernel.")
+
+          if text_prop(kernel_node, "compression") != "lzma":
+              fail("FIT kernel-1 is not LZMA-compressed.")
+
+          if text_prop(fdt_node, "type") != "flat_dt":
+              fail("FIT fdt-1 type is not flat_dt.")
+
+          kernel_data = kernel_node.get("data", b"")
+          if not kernel_data:
+              fail("FIT kernel payload is not embedded inline.")
+
+          fdt_data = fdt_node.get("data", b"")
+          if not fdt_data:
+              fail("FIT device tree payload is not embedded inline.")
+
+          if b"newland,nl-wr8103" not in fdt_data:
+              fail("FIT device tree does not identify newland,nl-wr8103.")
+
+          if b"mediatek,mt7981" not in fdt_data:
+              fail("FIT device tree does not identify mediatek,mt7981.")
+
+          if text_prop(configurations, "default") != "config-1":
+              fail("FIT default configuration is not config-1.")
+
+          if text_prop(config_node, "kernel") != "kernel-1":
+              fail("FIT config-1 does not reference kernel-1.")
+
+          if text_prop(config_node, "fdt") != "fdt-1":
+              fail("FIT config-1 does not reference fdt-1.")
+
+          root_node = nodes.get("/", {})
+          rootfs_size = int(text_prop(root_node, "rootfs_size"))
+          rootfs_crc = text_prop(root_node, "rootfs_crc32").lower()
+
+          size_cell = rootfs_node.get("size", b"")
+          if len(size_cell) != 4 or int.from_bytes(size_cell, "big") != rootfs_size:
+              fail("FIT /rootfs/size does not match rootfs_size.")
+
+          if rootfs_size <= 0 or rootfs_size > len(rootfs):
+              fail("FIT rootfs_size is outside the rootfs UBI volume.")
+
+          actual_crc = f"{zlib.crc32(rootfs[:rootfs_size]) & 0xffffffff:08x}"
+          if actual_crc != rootfs_crc:
+              fail(f"FIT rootfs CRC mismatch: FIT={rootfs_crc}, actual={actual_crc}")
+
+          hash_value = rootfs_hash.get("value")
+          if hash_value != bytes.fromhex(rootfs_crc):
+              fail("FIT rootfs/hash-1 CRC does not match rootfs_crc32.")
+
+          if any(byte != 0xff for byte in rootfs[rootfs_size:]):
+              fail("Rootfs UBI volume has unexpected data after rootfs_size.")
+
+          if any(key in rootfs_node for key in ("data", "data-position", "data-offset")):
+              fail("Rootfs data is embedded/referenced externally in the kernel FIT; "
+                   "expected metadata-only rootfs node for separate UBI rootfs volume.")
+
+          # Check the separate sysupgrade artifact is a FIT image for this device.
+          sysupgrade = Path(sysupgrade_path).read_bytes()
+          if sysupgrade[:4] != bytes.fromhex("d00dfeed"):
+              fail("Sysupgrade image does not start with FIT/FDT magic.")
+
+          if b"newland,nl-wr8103" not in sysupgrade:
+              fail("Sysupgrade FIT does not identify newland,nl-wr8103.")
+
+          print("All Factory UBI checks passed.")
+          print(f"Factory size: {Path(factory_path).stat().st_size} bytes")
+          print(f"UBI PEB size: {PEB}; UBI LEB size: {LEB}")
+          print("UBI volume table: kernel, rootfs (rootfs_data is created at first boot)")
+          print(f"Kernel FIT size: {fit_size} bytes")
+          print("Kernel compression: LZMA")
+          print("FIT device tree: newland,nl-wr8103 / mediatek,mt7981")
+          print(f"Rootfs size: {rootfs_size} bytes")
+          print(f"Rootfs CRC32: {actual_crc}")
+          print("Sysupgrade FIT magic and device identity checks passed.")
+          PY
+
+      - name: Generate checksums
+        working-directory: immortalwrt
+        run: |
+          set -euo pipefail
+
+          OUT="bin/targets/mediatek/filogic"
+          cd "$OUT"
+
+          find . -maxdepth 1 -type f \
+            -name '*newland_nl-wr8103*' \
+            ! -name 'NL-WR8103-SHA256SUMS' \
+            -print0 |
+            xargs -0 -r sha256sum > NL-WR8103-SHA256SUMS
+
+          echo "Firmware checksums:"
+          cat NL-WR8103-SHA256SUMS
+
+      - name: Upload verified firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: NL-WR8103-ImmortalWrt-25.12-Factory-verified
+          path: |
+            immortalwrt/bin/targets/mediatek/filogic/*newland_nl-wr8103*
+            immortalwrt/bin/targets/mediatek/filogic/profiles.json
+            immortalwrt/bin/targets/mediatek/filogic/sha256sums
+            immortalwrt/bin/targets/mediatek/filogic/config.buildinfo
+            immortalwrt/bin/targets/mediatek/filogic/NL-WR8103-SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
